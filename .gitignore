@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+.DS_Store
+coverage.out
+*.test
+infra/**/.terraform/
+infra/**/*.tfstate*

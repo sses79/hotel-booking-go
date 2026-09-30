@@ -1,0 +1,8 @@
+.git
+.env
+.env.*
+!.env.example
+infra
+docs
+*.md
+coverage.out

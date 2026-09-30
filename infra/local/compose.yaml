@@ -1,0 +1,55 @@
+name: hotel-booking-go
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-local}
+  SPANNER_PROJECT: ${SPANNER_PROJECT:-hotel-booking-local}
+  SPANNER_INSTANCE: ${SPANNER_INSTANCE:-hotel-booking}
+  SPANNER_DATABASE: ${SPANNER_DATABASE:-hotel-booking}
+  SPANNER_EMULATOR_HOST: spanner:9010
+
+x-go-dev: &go-dev
+  image: golang:1.25-alpine
+  working_dir: /src
+  volumes:
+    - ../..:/src
+    - go-mod-cache:/go/pkg/mod
+    - go-build-cache:/root/.cache/go-build
+
+services:
+  spanner:
+    image: gcr.io/cloud-spanner-emulator/emulator:1.5.53
+    ports:
+      - "127.0.0.1:9010:9010"
+      - "127.0.0.1:9020:9020"
+
+  schema:
+    <<: *go-dev
+    environment: *app-env
+    command: ["go", "run", "./cmd/schema"]
+    depends_on:
+      spanner:
+        condition: service_started
+    restart: "no"
+
+  api:
+    <<: *go-dev
+    environment:
+      <<: *app-env
+      FUNCTION_TARGET: HotelAPI
+      PORT: "8080"
+    command: ["go", "run", "./cmd/local"]
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      schema:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  go-mod-cache:
+  go-build-cache:

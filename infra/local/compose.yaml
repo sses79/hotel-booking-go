@@ -2,10 +2,11 @@ name: hotel-booking-go
 
 x-app-env: &app-env
   APP_ENV: ${APP_ENV:-local}
-  SPANNER_PROJECT: ${SPANNER_PROJECT:-hotel-booking-local}
-  SPANNER_INSTANCE: ${SPANNER_INSTANCE:-hotel-booking}
-  SPANNER_DATABASE: ${SPANNER_DATABASE:-hotel-booking}
-  SPANNER_EMULATOR_HOST: spanner:9010
+  ORACLE_HOST: ${ORACLE_HOST:-oracle}
+  ORACLE_PORT: ${ORACLE_PORT:-1521}
+  ORACLE_SERVICE: ${ORACLE_SERVICE:-FREEPDB1}
+  ORACLE_USER: ${ORACLE_USER:-hotel_booking}
+  ORACLE_PASSWORD: ${ORACLE_PASSWORD:-hotel_booking_local}
 
 x-go-dev: &go-dev
   image: golang:1.25-alpine
@@ -16,19 +17,31 @@ x-go-dev: &go-dev
     - go-build-cache:/root/.cache/go-build
 
 services:
-  spanner:
-    image: gcr.io/cloud-spanner-emulator/emulator:1.5.53
+  oracle:
+    image: gvenzl/oracle-free:23.26.3-slim
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_ADMIN_PASSWORD:-oracle_admin_local}
+      APP_USER: ${ORACLE_USER:-hotel_booking}
+      APP_USER_PASSWORD: ${ORACLE_PASSWORD:-hotel_booking_local}
     ports:
-      - "127.0.0.1:9010:9010"
-      - "127.0.0.1:9020:9020"
+      - "127.0.0.1:1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      - ./init-test-user.sql:/container-entrypoint-initdb.d/001-test-user.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
 
   schema:
     <<: *go-dev
     environment: *app-env
     command: ["go", "run", "./cmd/schema"]
     depends_on:
-      spanner:
-        condition: service_started
+      oracle:
+        condition: service_healthy
     restart: "no"
 
   api:
@@ -47,9 +60,25 @@ services:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health/ready"]
       interval: 2s
       timeout: 3s
-      retries: 30
+      retries: 60
+      start_period: 30s
     restart: unless-stopped
 
+  test:
+    <<: *go-dev
+    profiles: ["test"]
+    environment:
+      <<: *app-env
+      APP_ENV: local
+      ORACLE_USER: hotel_booking_test
+      ORACLE_PASSWORD: hotel_booking_test_local
+      ORACLE_INTEGRATION: "1"
+    command: ["go", "test", "-count=1", "./..."]
+    depends_on:
+      oracle:
+        condition: service_healthy
+
 volumes:
+  oracle-data:
   go-mod-cache:
   go-build-cache:

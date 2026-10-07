@@ -3,44 +3,44 @@ package config
 import (
 	"fmt"
 	"os"
-	"regexp"
+	"strconv"
+	"strings"
 )
 
-var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-
 type Config struct {
-	Env      string
-	Project  string
-	Instance string
-	Database string
+	Env            string
+	OracleHost     string
+	OraclePort     int
+	OracleService  string
+	OracleUser     string
+	OraclePassword string
 }
 
 func Load() (Config, error) {
-	c := Config{
-		Env:      value("APP_ENV", "production"),
-		Project:  value("SPANNER_PROJECT", "hotel-booking-local"),
-		Instance: value("SPANNER_INSTANCE", "hotel-booking"),
-		Database: value("SPANNER_DATABASE", "hotel-booking"),
+	port, err := strconv.Atoi(value("ORACLE_PORT", "1521"))
+	if err != nil || port < 1 || port > 65535 {
+		return Config{}, fmt.Errorf("ORACLE_PORT must be an integer between 1 and 65535")
 	}
-	for label, id := range map[string]string{"project": c.Project, "instance": c.Instance, "database": c.Database} {
-		if !idPattern.MatchString(id) {
-			return Config{}, fmt.Errorf("invalid Spanner %s ID %q", label, id)
+	c := Config{
+		Env:            value("APP_ENV", "production"),
+		OracleHost:     value("ORACLE_HOST", "localhost"),
+		OraclePort:     port,
+		OracleService:  value("ORACLE_SERVICE", "FREEPDB1"),
+		OracleUser:     os.Getenv("ORACLE_USER"),
+		OraclePassword: os.Getenv("ORACLE_PASSWORD"),
+	}
+	for _, field := range []struct{ name, value string }{
+		{"ORACLE_HOST", c.OracleHost}, {"ORACLE_SERVICE", c.OracleService},
+		{"ORACLE_USER", c.OracleUser}, {"ORACLE_PASSWORD", c.OraclePassword},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return Config{}, fmt.Errorf("%s is required", field.name)
 		}
 	}
 	return c, nil
 }
 
-func (c Config) DatabasePath() string {
-	return fmt.Sprintf("projects/%s/instances/%s/databases/%s", c.Project, c.Instance, c.Database)
-}
-
-func (c Config) InstancePath() string {
-	return fmt.Sprintf("projects/%s/instances/%s", c.Project, c.Instance)
-}
-
-func (c Config) DemoRoutesEnabled() bool {
-	return c.Env == "local" || c.Env == "demo"
-}
+func (c Config) DemoRoutesEnabled() bool { return c.Env == "local" || c.Env == "demo" }
 
 func value(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {

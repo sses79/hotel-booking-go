@@ -1,0 +1,165 @@
+openapi: 3.0.3
+info:
+  title: Hotel Booking API
+  version: 1.0.0
+  description: Local Oracle demo. Stays use UTC dates and exclude the checkout night. Booking success is independent of event delivery.
+servers:
+  - url: /
+paths:
+  /health/live:
+    get:
+      responses:
+        '200': {description: Process running}
+  /health/ready:
+    get:
+      responses:
+        '200': {description: Schema ready}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/hotels:
+    get:
+      parameters:
+        - {name: name, in: query, schema: {type: string, maxLength: 200}, description: Case-insensitive literal substring}
+      responses:
+        '200':
+          description: Hotels ordered by name
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Hotel'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/hotels/{hotel_id}/rooms/available:
+    get:
+      parameters:
+        - {name: hotel_id, in: path, required: true, schema: {type: string}}
+        - {name: check_in, in: query, required: true, schema: {type: string, format: date}}
+        - {name: check_out, in: query, required: true, schema: {type: string, format: date}}
+        - {name: guests, in: query, required: true, schema: {type: integer, minimum: 1, maximum: 4}}
+        - {name: room_type, in: query, schema: {type: string, enum: [single, double, deluxe]}}
+      responses:
+        '200':
+          description: Rooms available for every night, ordered by capacity, type, number
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Room'}}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/bookings:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BookingRequest'}
+      responses:
+        '201':
+          description: Committed booking; event_delivery can remain pending
+          headers:
+            Location: {schema: {type: string}, description: Booking lookup URL}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Booking'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409':
+          description: No suitable room for the whole stay
+          content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/bookings/{reference}:
+    get:
+      parameters:
+        - {name: reference, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Booking details
+          content: {application/json: {schema: {$ref: '#/components/schemas/Booking'}}}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/admin/seed:
+    post:
+      description: Only in local/demo mode. Replaces all demo data with Grand Plaza and six rooms.
+      responses:
+        '200':
+          description: Seed result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hotel_id: {type: string}
+                  hotel_name: {type: string}
+                  rooms_created: {type: integer}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /api/v1/admin/reset:
+    post:
+      description: Only in local/demo mode. Removes demo data in one transaction; preserves schema.
+      responses:
+        '204': {description: Reset complete}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  schemas:
+    Hotel:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        created_at: {type: string, format: date-time}
+    Room:
+      type: object
+      properties:
+        id: {type: string}
+        hotel_id: {type: string}
+        room_number: {type: string}
+        room_type: {type: string, enum: [single, double, deluxe]}
+        capacity: {type: integer}
+    BookingRequest:
+      type: object
+      additionalProperties: false
+      required: [hotel_id, check_in, check_out, guests, guest_name]
+      properties:
+        hotel_id: {type: string, maxLength: 36}
+        check_in: {type: string, format: date, description: Today or later in UTC}
+        check_out: {type: string, format: date, description: 1–30 nights after check-in}
+        guests: {type: integer, minimum: 1, maximum: 4}
+        room_type: {type: string, enum: [single, double, deluxe]}
+        guest_name: {type: string, minLength: 1, maxLength: 200}
+    Booking:
+      type: object
+      properties:
+        id: {type: string}
+        reference: {type: string, pattern: '^HB-[0-9A-F]{32}$'}
+        hotel_id: {type: string}
+        hotel_name: {type: string}
+        room_id: {type: string}
+        room_number: {type: string}
+        room_type: {type: string}
+        capacity: {type: integer}
+        guest_name: {type: string}
+        guest_count: {type: integer}
+        check_in: {type: string, format: date}
+        check_out: {type: string, format: date}
+        created_at: {type: string, format: date-time}
+        event_id: {type: string, format: uuid}
+        event_delivery: {type: string, enum: [pending, published], description: Pub/Sub acceptance, separate from worker processing}
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        request_id: {type: string}
+  responses:
+    Invalid:
+      description: Invalid request
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NotFound:
+      description: Resource not found
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    Unavailable:
+      description: Database unavailable
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}

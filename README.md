@@ -2,10 +2,9 @@
 
 This is a Go and Oracle Database adaptation of the
 [hotel booking challenge](https://github.com/sses79/hotel-booking/blob/dev/challenge.md).
-Phase 1 provides a containerized local API, Oracle Database Free, schema setup,
-and the seed/search/reset part of the demo. Availability, booking, Pub/Sub,
-and the event function follow in later phases. Cloud Run functions and Pub/Sub
-remain the planned GCP deployment architecture; hosted Oracle is deferred.
+Phases 1–4 provide the complete local booking API, Oracle Database Free,
+a Pub/Sub emulator, a separate CloudEvent function, and scheduled outbox recovery.
+Phase 5 (hosted Oracle and GCP deployment) is deferred by request.
 
 ## Requirements
 
@@ -83,7 +82,7 @@ user's schema; it does not provision a database or cloud resources. Hosted Oracl
 networking, credentials, and provisioning belong to the later GCP phase.
 
 Timestamps use UTC `TIMESTAMP(6)`, string lengths use Oracle character semantics,
-and stay dates will use midnight-normalized `DATE` values.
+and stay dates use midnight-normalized `DATE` values.
 
 ## Checks
 
@@ -108,8 +107,148 @@ docker compose -f infra/local/compose.yaml --profile test run --rm test
 
 These tests drop/recreate tables **only in the local test schema**, exercise
 schema reruns and incompatibility checks, search and the fixed six-room seed,
-and inject insert/delete failures to prove transaction rollback. They require
+and inject insert/delete failures to prove transaction rollback. Booking tests
+also cover stable selection, back-to-back stays, late outbox failure, concurrent
+room ownership, partial-night rollback, duplicate processing, and replay. They require
 `ORACLE_INTEGRATION=1`, `APP_ENV=local`, and `ORACLE_USER=hotel_booking_test`.
 The suite skips database tests during ordinary `go test ./...`.
 
-See [plan.md](plan.md) for the full API and event delivery phases.
+## Full API demo
+
+Open [Swagger UI](http://localhost:8080/docs) to seed, search, check availability,
+book, look up a reference, and reset. The OpenAPI specification is served at
+`/openapi.yaml`. Swagger UI 5.29.0 assets and its license are bundled in the
+binary so documentation needs no external CDN.
+
+Run the full HTTP cycle, including the last-room concurrency check, with Docker
+only (the script calculates future dates):
+
+```bash
+sh scripts/demo.sh
+```
+
+It resets, seeds, searches for `Grand`, finds rooms for two guests, books room
+201, looks up the returned reference, and confirms that room is unavailable.
+It also races two HTTP bookings for the last deluxe room and requires exactly
+one `201` and one `409`, then resets and confirms hotel search is empty.
+These scripts replace the fictional local demo data; run them sequentially.
+
+Booking requests use this JSON shape (replace dates with future UTC dates):
+
+```json
+{
+  "hotel_id": "00000000-0000-0000-0000-000000000001",
+  "check_in": "2030-01-01",
+  "check_out": "2030-01-04",
+  "guests": 2,
+  "guest_name": "Fictional Guest",
+  "room_type": "double"
+}
+```
+
+`room_type` is optional and accepts `single`, `double`, or `deluxe`. Stays last
+1–30 nights, start today or later in UTC, and exclude the checkout night.
+Rooms are selected by capacity, type, and room number. A booking response
+contains hotel/room details, a random `HB-` plus 32 uppercase hex reference,
+and a `Location` lookup URL. Invalid input returns `400`, missing resources
+`404`, exhausted availability `409`, and database failures `503` with JSON
+`code`, `message`, and `request_id`.
+
+Each candidate transaction inserts the booking, all occupied nights in date
+order, and a stable outbox event. Oracle's unique room/date primary key decides
+concurrent ownership. A collision rolls back the candidate before trying the
+next suitable room; unrelated unique violations propagate as database failures.
+An uncertain commit is never retried automatically.
+
+## Local Pub/Sub and CloudEvent function
+
+Start the local events profile with its API overlay:
+
+```bash
+docker compose -f infra/local/compose.yaml -f infra/local/events.yaml \
+  --profile events up -d --wait --wait-timeout 600
+sh scripts/events.sh
+```
+
+The overlay enables API publishing to `local-hotel/booking-created` in the
+emulator. The base Compose API remains usable with no Pub/Sub service.
+The profile runs `BookingCreated` through the actual Go Functions Framework
+in a separate worker container. A local bridge preserves the wrapped Pub/Sub
+push body, adds CloudEvents headers, and forwards function success/failure
+back to the emulator. This is a push adapter, not an Eventarc emulator.
+[Cloud Run event-driven functions use Eventarc](https://docs.cloud.google.com/run/docs/function-triggers)
+in the deferred cloud deployment.
+
+The setup command creates the topic and push subscription idempotently.
+The emulator has in-memory state; recreate its topic/subscription after restart:
+
+```bash
+docker compose -f infra/local/compose.yaml --profile events \
+  run --rm --no-deps pubsubsetup
+```
+
+`event_delivery` is `pending` or `published`. A confirmed Oracle commit always
+returns `201`, even when Pub/Sub is offline. `published` means Pub/Sub accepted
+the message; processing is audited separately in `ProcessedEvents`.
+Events contain stable IDs, the booking reference, hotel/room IDs, and creation
+time. They exclude the guest name. The worker inserts the event ID transactionally;
+redelivery, including concurrent redelivery, produces one audit row.
+
+## Outbox recovery
+
+The independent `outbox` service retries up to 100 pending rows every five
+seconds (`OUTBOX_INTERVAL`, minimum `1s`). Each scan has a 30-second deadline.
+There is no request-owned background goroutine: delivery continues without API
+traffic. Rows are marked published only after Pub/Sub acceptance. A crash or
+failed mark can cause another publish with the same event ID; the worker's
+primary key prevents duplicate effects. Failed rows stay pending.
+
+Run the real outage/recovery demonstration:
+
+```bash
+sh scripts/recovery.sh
+```
+
+This stops Pub/Sub and the retry publisher, verifies a booking still commits
+with three occupied nights and a pending event, restarts the emulator, recreates
+its topic/subscription, and restarts the publisher. It waits for delivery through
+the function and checks duplicate publication leaves one audit row. A shell trap
+restores the stopped services on failure.
+
+Run a single replay batch manually:
+
+```bash
+docker compose -f infra/local/compose.yaml --profile events \
+  run --rm --no-deps -e OUTBOX_ONCE=1 outbox
+```
+
+To return to the API-only stack without deleting Oracle data:
+
+```bash
+docker compose -f infra/local/compose.yaml --profile events \
+  stop outbox pubsub eventbridge worker
+docker compose -f infra/local/compose.yaml up -d api
+```
+
+## Persistence and runtime image
+
+Verify a booking, occupied nights, and its outbox row survive an ordinary Oracle
+restart:
+
+```bash
+sh scripts/persistence.sh
+```
+
+The multi-stage runtime image contains `hotel-api` (both function targets),
+`hotel-schema`, `hotel-outbox`, and `hotel-eventbridge`, and runs as a non-root
+user. To run the API/worker from that image instead of the development bind mount:
+
+```bash
+docker build -t hotel-booking-go:local .
+docker compose -f infra/local/compose.yaml -f infra/local/events.yaml \
+  -f infra/local/runtime.yaml --profile events up -d --wait --wait-timeout 600
+```
+
+See [docs/verification.md](docs/verification.md) for executed checks,
+[docs/architecture.md](docs/architecture.md) for the architecture/interview
+walkthrough, and [plan.md](plan.md) for phase status.

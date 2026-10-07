@@ -9,7 +9,7 @@ x-app-env: &app-env
   ORACLE_PASSWORD: ${ORACLE_PASSWORD:-hotel_booking_local}
 
 x-go-dev: &go-dev
-  image: golang:1.25-alpine
+  image: golang:1.25.0-alpine3.22
   working_dir: /src
   volumes:
     - ../..:/src
@@ -77,6 +77,66 @@ services:
     depends_on:
       oracle:
         condition: service_healthy
+
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:539.0.0-emulators
+    profiles: ["events"]
+    command: ["gcloud", "beta", "emulators", "pubsub", "start", "--project=local-hotel", "--host-port=0.0.0.0:8085"]
+
+  pubsubsetup:
+    <<: *go-dev
+    profiles: ["events"]
+    environment:
+      PUBSUB_EMULATOR_HOST: pubsub:8085
+      PUBSUB_PROJECT_ID: local-hotel
+      PUBSUB_TOPIC: booking-created
+    command: ["go", "run", "./cmd/pubsubsetup"]
+    depends_on:
+      pubsub:
+        condition: service_started
+      eventbridge:
+        condition: service_started
+
+  worker:
+    <<: *go-dev
+    profiles: ["events"]
+    environment:
+      <<: *app-env
+      FUNCTION_TARGET: BookingCreated
+      PORT: "8080"
+    command: ["go", "run", "./cmd/local"]
+    depends_on:
+      schema:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  eventbridge:
+    <<: *go-dev
+    profiles: ["events"]
+    environment:
+      EVENT_TARGET_URL: http://worker:8080/
+    command: ["go", "run", "./cmd/eventbridge"]
+    depends_on:
+      worker:
+        condition: service_started
+    restart: unless-stopped
+
+  outbox:
+    <<: *go-dev
+    profiles: ["events"]
+    environment:
+      <<: *app-env
+      PUBSUB_EMULATOR_HOST: pubsub:8085
+      PUBSUB_PROJECT_ID: local-hotel
+      PUBSUB_TOPIC: booking-created
+      OUTBOX_INTERVAL: ${OUTBOX_INTERVAL:-5s}
+    command: ["go", "run", "./cmd/outbox"]
+    depends_on:
+      schema:
+        condition: service_completed_successfully
+      pubsubsetup:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   oracle-data:

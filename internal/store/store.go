@@ -122,7 +122,10 @@ func (s *Store) SearchHotels(ctx context.Context, name string) ([]Hotel, error) 
 }
 
 func deleteAll(ctx context.Context, tx *sql.Tx) error {
-	for _, table := range []string{"ProcessedEvents", "OutboxEvents", "OccupiedNights", "Bookings", "Rooms", "Hotels"} {
+	// Lock/remove outbox rows before audits, matching the consumer's lock order.
+	// A delivery already running finishes before its audit is deleted; a late
+	// delivery sees no outbox row and cannot recreate data after reset.
+	for _, table := range []string{"OutboxEvents", "ProcessedEvents", "OccupiedNights", "Bookings", "Rooms", "Hotels"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("delete %s: %w", table, err)
 		}

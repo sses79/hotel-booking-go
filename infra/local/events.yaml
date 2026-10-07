@@ -1,0 +1,10 @@
+# Overlay only when exercising events. The base API has no Pub/Sub dependency.
+services:
+  api:
+    environment:
+      PUBSUB_EMULATOR_HOST: pubsub:8085
+      PUBSUB_PROJECT_ID: local-hotel
+      PUBSUB_TOPIC: booking-created
+    depends_on:
+      pubsubsetup:
+        condition: service_completed_successfully

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Rebuild the [hotel booking demo](https://github.com/sses79/hotel-booking) as a small Go project on Google Cloud. Complete the original challenge's API test cycle—reset, seed, search, availability, booking, lookup, and verification—before adding Pub/Sub and a separate event-handling GCF extension. Demonstrate Go services, Oracle SQL and transactions, Pub/Sub, cloud deployment, and production-minded delivery. The current implementation covers the local foundation: readiness, seed/reset, and hotel search. Availability, booking, and events remain later phases.
+Rebuild the [hotel booking demo](https://github.com/sses79/hotel-booking) as a small Go project on Google Cloud. Complete the original challenge's API test cycle—reset, seed, search, availability, booking, lookup, and verification—before adding Pub/Sub and a separate event-handling GCF extension. Demonstrate Go services, Oracle SQL and transactions, Pub/Sub, cloud deployment, and production-minded delivery. Phases 1–4 are implemented for local use: the complete API demo, Pub/Sub emulator extension, and scheduled outbox recovery. Phase 5 is deferred by request; no hosted Oracle or GCP resources are provisioned.
 
 The [original challenge](https://github.com/sses79/hotel-booking/blob/dev/challenge.md), [.NET solution summary](https://github.com/sses79/hotel-booking/blob/dev/docs/hotel-booking-challenge-solution.md), and [.NET implementation](https://github.com/sses79/hotel-booking) are the primary behavior reference. The [Python project](https://github.com/sses79/hotel-booking-python) is a secondary reference for container workflow and a stronger booking-reference format. This Go project explores a different stack; it is not a submission that meets the original challenge's C#/EF Core requirement.
 
@@ -147,6 +147,8 @@ Deploy the two registered entry points separately from the same module root, as 
 - Keep schema creation, seed, deploy, smoke test, and teardown documented as separate commands. Never commit credentials, `.env` files, or Terraform state.
 
 ## Delivery Phases
+
+Local delivery status: phases **1–4 complete**. Phase **5 deferred** at the user’s request. See `docs/verification.md` for the executed checks and `README.md` for reproducible commands.
 
 1. **Containerized local foundation:** Go module, Functions Framework HTTP entry point, configuration, structured logging, health routes, Dockerfile, Compose with persistent Oracle Database Free, versioned Oracle schema including the outbox table, restart-safe schema setup command, API seed/reset endpoints, partial hotel search, and local run instructions. Exit when a clean Docker-only checkout can start the API, reach readiness, seed the six rooms, search for `Grand`, reset, and search an empty database.
 2. **Complete API demo:** Availability endpoint, transactional booking and lookup, served OpenAPI and Swagger UI, end-to-end HTTP demo script, and focused integration tests. Exit when the full reset-to-booking-to-reset cycle works through the Compose API and room-night uniqueness holds.

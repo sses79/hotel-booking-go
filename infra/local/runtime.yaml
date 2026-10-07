@@ -1,0 +1,22 @@
+# Build hotel-booking-go:local first. Keep setup/test services in Go dev images.
+services:
+  api:
+    image: hotel-booking-go:local
+    working_dir: /app
+    volumes: !reset []
+    command: ["hotel-api"]
+  worker:
+    image: hotel-booking-go:local
+    working_dir: /app
+    volumes: !reset []
+    command: ["hotel-api"]
+  eventbridge:
+    image: hotel-booking-go:local
+    working_dir: /app
+    volumes: !reset []
+    command: ["hotel-eventbridge"]
+  outbox:
+    image: hotel-booking-go:local
+    working_dir: /app
+    volumes: !reset []
+    command: ["hotel-outbox"]
